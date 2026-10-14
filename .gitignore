@@ -1,0 +1,9 @@
+# Never commit sheet exports or real numbers
+*.xlsx
+*.csv
+*.pdf
+exports/
+.clasp.json
+.clasprc.json
+node_modules/
+.DS_Store

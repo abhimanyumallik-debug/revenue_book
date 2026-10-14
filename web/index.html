@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Fynd revenue book</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <script src="config.js"></script>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+</head>
+<body>
+  <header class="bar">
+    <div class="bar-inner">
+      <span class="brand">Fynd</span>
+      <span class="crumb" id="crumb">REVENUE COUNCIL | INTERNAL</span>
+      <span class="spacer"></span>
+      <span class="who" id="who"></span>
+      <button class="link" id="signout" hidden>Sign out</button>
+    </div>
+  </header>
+
+  <main>
+    <section id="gate" class="gate">
+      <p class="kicker">FYND REVENUE COUNCIL | INTERNAL</p>
+      <h1 id="title">FY27 revenue book</h1>
+      <p class="lede">Revenue billed April to September and expected October to March, by CXO. Read live from the MIS sheet.</p>
+      <div id="signin"></div>
+      <p class="muted small" id="gate-note">Sign in with your Fynd Google account. You see the numbers you own.</p>
+      <p class="error" id="gate-error" hidden></p>
+    </section>
+
+    <div id="report" hidden>
+      <div class="control">
+        <div><span class="label">AS OF</span><span id="asof"></span></div>
+        <div><span class="label">VIEW</span><span id="viewlabel"></span></div>
+        <div id="filter-wrap" hidden>
+          <span class="label">CXO</span>
+          <select id="filter"><option value="">All CXOs</option></select>
+        </div>
+        <div class="actions">
+          <button id="refresh" class="btn">Refresh</button>
+          <button id="print" class="btn ghost">Print / PDF</button>
+        </div>
+      </div>
+
+      <div id="warnings" class="warn" hidden></div>
+
+      <section id="s-glance"></section>
+      <section id="s-actuals"></section>
+      <section id="s-sep"></section>
+      <section id="s-proj"></section>
+      <section id="s-beyond"></section>
+    </div>
+
+    <p class="loading" id="loading" hidden>Reading the sheet…</p>
+  </main>
+
+  <footer class="foot">© Shopsense Retail Technologies | Internal. Confidential.</footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
