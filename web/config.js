@@ -10,5 +10,5 @@ window.PORTAL_CONFIG = {
   // Google Workspace domain shown on the sign-in prompt
   DOMAIN: 'gofynd.com',
 
-  TITLE: 'FY27 revenue book'
+  TITLE: 'Finance portal'
 };

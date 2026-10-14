@@ -1,19 +1,18 @@
 /**
- * Fynd Revenue Portal — Apps Script web app (the data layer).
+ * Fynd Finance Portal — Apps Script web app (the data layer).
  *
- * Deploy as a web app:  Execute as = Me (sheet owner or someone with access)
+ * Deploy as a web app:  Execute as = Me (an account that can read the MIS sheet)
  *                       Who has access = Anyone
- * "Anyone" is needed so the GitHub Pages site can call it. The real gate is
- * the Google ID token every request must carry: it is verified here, the
- * domain is checked, and the email is looked up in the "Portal Access" tab.
- * Nothing is returned to an account that is not on that tab.
+ * "Anyone" lets the GitHub Pages site call it. The gate is the Google ID token
+ * each request carries: verified here, domain checked, email looked up on the
+ * "Portal Access" tab. Accounts not on that tab get nothing.
  *
- * Request:  POST  body (text/plain) = {"idToken": "...", "action": "book" | "schema" | "whoami"}
- * Response: JSON  {"ok": true, ...} or {"ok": false, "error": "..."}
+ * Request:  POST body (text/plain) = {"idToken": "...", "action": "book" | "whoami" | "schema", "refresh": bool}
+ * Response: JSON {"ok": true, ...} or {"ok": false, "error": "..."}
  */
 
 function doGet() {
-  return json_({ ok: true, service: 'fynd-revenue-portal', note: 'POST with an ID token.' });
+  return json_({ ok: true, service: 'fynd-finance-portal' });
 }
 
 function doPost(e) {
@@ -27,20 +26,18 @@ function doPost(e) {
     }
     var action = body.action || 'book';
 
-    if (action === 'whoami') {
-      return json_({ ok: true, email: who.email, role: access.role, cxo: access.cxo || null });
-    }
+    if (action === 'whoami') return json_({ ok: true, email: who.email, role: access.role, cxos: access.cxos || null });
 
     if (action === 'schema') {
       if (access.role !== 'admin') return json_({ ok: false, error: 'Admins only.' });
       var full = getBook_(true);
-      return json_({ ok: true, schema: full.schema, warnings: full.warnings, tabs: listTabs_() });
+      return json_({ ok: true, schema: full.schema, warnings: full.warnings, recon: full.recon, tabs: listTabs_() });
     }
 
     var book = getBook_(body.refresh === true && access.role === 'admin');
     var view = Report.filterFor(book, access);
     view.viewer.email = who.email;
-    log_(who.email, 'book:' + (access.cxo || 'all'));
+    log_(who.email, 'book:' + (access.role === 'admin' ? 'all' : access.cxos.join('+')));
     return json_({ ok: true, book: view });
 
   } catch (err) {
@@ -58,17 +55,15 @@ function verifyIdToken_(token) {
   var t = JSON.parse(res.getContentText());
   if (t.aud !== CONFIG.OAUTH_CLIENT_ID) throw new Error('Token was not issued for this portal.');
   if (String(t.email_verified) !== 'true') throw new Error('Email not verified.');
-  if (CONFIG.ALLOWED_DOMAIN && t.hd !== CONFIG.ALLOWED_DOMAIN) {
-    throw new Error('Use your @' + CONFIG.ALLOWED_DOMAIN + ' account.');
-  }
+  if (CONFIG.ALLOWED_DOMAIN && t.hd !== CONFIG.ALLOWED_DOMAIN) throw new Error('Use your @' + CONFIG.ALLOWED_DOMAIN + ' account.');
   if (Number(t.exp) * 1000 < Date.now()) throw new Error('Sign-in expired. Sign in again.');
   return { email: String(t.email).toLowerCase() };
 }
 
 /**
- * Access comes from the "Portal Access" tab. Script property ADMINS
- * (comma-separated emails) is a fallback so the first admin can get in
- * before the tab exists.
+ * "Portal Access" tab: Email | Role | CXO
+ *   Role admin -> all CXOs.  Role cxo -> the CXOs listed (comma-separated, e.g. "Ronak, Dharmendra").
+ * Script property ADMINS (comma-separated emails) lets the first admin in before the tab exists.
  */
 function lookupAccess_(email) {
   var admins = (PropertiesService.getScriptProperties().getProperty('ADMINS') || '')
@@ -76,8 +71,7 @@ function lookupAccess_(email) {
   if (admins.indexOf(email) >= 0) return { role: 'admin' };
 
   var cache = CacheService.getScriptCache();
-  var raw = cache.get('access');
-  var map;
+  var raw = cache.get('access'), map;
   if (raw) {
     map = JSON.parse(raw);
   } else {
@@ -86,61 +80,51 @@ function lookupAccess_(email) {
     if (sh) {
       var vals = sh.getDataRange().getValues();
       var h = Report._mapHeaders(vals, CONFIG.TABS.ACCESS.fields);
+      var cxoOf = Report._cxoResolver(CONFIG);
       for (var r = h.headerRow + 1; h.headerRow >= 0 && r < vals.length; r++) {
         var em = String(vals[r][h.cols.email] || '').trim().toLowerCase();
         if (!em) continue;
         var role = String(vals[r][h.cols.role] || '').trim().toLowerCase() === 'admin' ? 'admin' : 'cxo';
-        var cxo = h.cols.cxo != null ? Report._canonicalCxo(vals[r][h.cols.cxo], CONFIG.CXOS, null) : null;
-        map[em] = { role: role, cxo: cxo };
+        var cxos = h.cols.cxo == null ? [] : String(vals[r][h.cols.cxo] || '').split(/[,+;\/]/)
+          .map(function (s) { return cxoOf(s.trim()); }).filter(Boolean);
+        map[em] = { role: role, cxos: cxos };
       }
     }
     cache.put('access', JSON.stringify(map), 60);
   }
   var a = map[email];
   if (!a) return null;
-  if (a.role === 'cxo' && !a.cxo) return null;
+  if (a.role === 'cxo' && !a.cxos.length) return null;
   return a;
 }
 
 /* ---------- data ---------- */
 
-function ss_() {
-  return SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
-}
+function ss_() { return SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID); }
 
 function values_(name) {
   var sh = ss_().getSheetByName(name);
   return sh ? sh.getDataRange().getValues() : null;
 }
 
-function listTabs_() {
-  return ss_().getSheets().map(function (s) { return s.getName(); });
-}
+function listTabs_() { return ss_().getSheets().map(function (s) { return s.getName(); }); }
 
 function getBook_(force) {
   if (!force) {
     var cached = cacheGet_('book');
     if (cached) return cached;
   }
-  var owners = {};
-  CONFIG.CXOS.forEach(function (c) {
-    var tab = CONFIG.TABS.OWNER.tabNameFor[c] || c;
-    var v = values_(tab);
-    if (v) owners[c] = v;
-  });
+  var T = CONFIG.TABS;
   var input = {
     asOf: new Date().toISOString(),
-    summary: values_(CONFIG.TABS.SUMMARY.name) || [],
-    billed: values_(CONFIG.TABS.BILLED.name) || [],
-    owners: owners,
-    commitment: values_(CONFIG.TABS.COMMITMENT.name)
+    revenue: values_(T.REVENUE.name),
+    pnl: values_(T.PNL.name),
+    orderForms: values_(T.ORDER_FORM.name),
+    recon: values_(T.RECON.name)
   };
   var book = Report.build(input, CONFIG);
-  ['summary', 'billed'].forEach(function (k) {
-    if (!input[k].length) book.warnings.push('Tab "' + CONFIG.TABS[k.toUpperCase()].name + '" not found.');
-  });
-  CONFIG.CXOS.forEach(function (c) {
-    if (!owners[c]) book.warnings.push('No owner tab for ' + c + '; no projection shown.');
+  ['REVENUE', 'PNL', 'ORDER_FORM'].forEach(function (k) {
+    if (!input[{ REVENUE: 'revenue', PNL: 'pnl', ORDER_FORM: 'orderForms' }[k]]) book.warnings.push('Tab "' + T[k].name + '" not found.');
   });
   cachePut_('book', book, CONFIG.CACHE_SECONDS);
   return book;
@@ -150,6 +134,7 @@ function getBook_(force) {
 function cachePut_(key, obj, secs) {
   var s = JSON.stringify(obj), size = 90000, parts = {};
   var n = Math.ceil(s.length / size);
+  if (n > 50) return; // too large to cache; compute each time
   for (var i = 0; i < n; i++) parts[key + ':' + i] = s.substr(i * size, size);
   parts[key + ':n'] = String(n);
   CacheService.getScriptCache().putAll(parts, secs);
@@ -168,7 +153,7 @@ function cacheGet_(key) {
 
 /* ---------- audit ---------- */
 
-/** Appends to an "Portal Log" tab if it exists. Create the tab to switch logging on. */
+/** Appends to a "Portal Log" tab if it exists. Create the tab to switch logging on. */
 function log_(email, what) {
   try {
     var sh = ss_().getSheetByName('Portal Log');
@@ -180,10 +165,12 @@ function json_(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
 }
 
-/** Run once from the editor to authorise and check the sheet is readable. */
+/** Run once from the editor: authorises scopes and prints what matched. */
 function setupCheck() {
   var book = getBook_(true);
-  Logger.log('Tabs: ' + listTabs_().join(', '));
+  Logger.log('Months: ' + book.revenue.months.join(', ') + (book.revenue.partialMonth ? ' (' + book.revenue.partialMonth + ' partial)' : ''));
+  Logger.log('P&L months: ' + book.pnl.months.join(', '));
+  Logger.log('Reconciliation: ' + JSON.stringify(book.recon));
   Logger.log('Warnings: ' + JSON.stringify(book.warnings, null, 2));
-  Logger.log('Schema: ' + JSON.stringify(book.schema, null, 2));
+  Logger.log('Book size: ' + Math.round(JSON.stringify(book).length / 1024) + ' KB');
 }

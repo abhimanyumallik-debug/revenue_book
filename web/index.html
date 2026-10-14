@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex, nofollow">
-  <title>Fynd revenue book</title>
+  <title>Fynd finance portal</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
@@ -15,51 +15,63 @@
   <header class="bar">
     <div class="bar-inner">
       <span class="brand">Fynd</span>
-      <span class="crumb" id="crumb">REVENUE COUNCIL | INTERNAL</span>
+      <span class="crumb">FINANCE PORTAL | INTERNAL</span>
       <span class="spacer"></span>
       <span class="who" id="who"></span>
       <button class="link" id="signout" hidden>Sign out</button>
     </div>
+    <nav class="tabs" id="tabs" hidden>
+      <div class="tabs-inner">
+        <a href="#overview" data-tab="overview">Overview</a>
+        <a href="#revenue" data-tab="revenue">Revenue</a>
+        <a href="#mix" data-tab="mix">Mix</a>
+        <a href="#customers" data-tab="customers">Customers</a>
+        <a href="#pnl" data-tab="pnl">P&amp;L</a>
+        <a href="#orders" data-tab="orders">Order forms</a>
+        <a href="#checks" data-tab="checks" id="tab-checks" hidden>Checks</a>
+      </div>
+    </nav>
   </header>
 
   <main>
     <section id="gate" class="gate">
-      <p class="kicker">FYND REVENUE COUNCIL | INTERNAL</p>
-      <h1 id="title">FY27 revenue book</h1>
-      <p class="lede">Revenue billed April to September and expected October to March, by CXO. Read live from the MIS sheet.</p>
+      <p class="kicker">FYND | STRATEGY &amp; CONTROL | INTERNAL</p>
+      <h1 id="title">Finance portal</h1>
+      <p class="lede">Billing, collections, CXO P&amp;L and order forms, read live from the MIS for Monthly Report FY27. Rs Cr.</p>
       <div id="signin"></div>
-      <p class="muted small" id="gate-note">Sign in with your Fynd Google account. You see the numbers you own.</p>
+      <p class="muted small">Sign in with your Fynd Google account. You see the numbers you own.</p>
       <p class="error" id="gate-error" hidden></p>
     </section>
 
     <div id="report" hidden>
       <div class="control">
         <div><span class="label">AS OF</span><span id="asof"></span></div>
+        <div><span class="label">LAST INVOICE</span><span id="lastinv"></span></div>
         <div><span class="label">VIEW</span><span id="viewlabel"></span></div>
         <div id="filter-wrap" hidden>
-          <span class="label">CXO</span>
+          <label class="label" for="filter">CXO</label>
           <select id="filter"><option value="">All CXOs</option></select>
         </div>
         <div class="actions">
           <button id="refresh" class="btn">Refresh</button>
-          <button id="print" class="btn ghost">Print / PDF</button>
+          <button id="print" class="btn ghost">Print</button>
         </div>
       </div>
 
-      <div id="warnings" class="warn" hidden></div>
-
-      <section id="s-glance"></section>
-      <section id="s-actuals"></section>
-      <section id="s-sep"></section>
-      <section id="s-proj"></section>
-      <section id="s-beyond"></section>
+      <div id="p-overview" class="page"></div>
+      <div id="p-revenue" class="page" hidden></div>
+      <div id="p-mix" class="page" hidden></div>
+      <div id="p-customers" class="page" hidden></div>
+      <div id="p-pnl" class="page" hidden></div>
+      <div id="p-orders" class="page" hidden></div>
+      <div id="p-checks" class="page" hidden></div>
     </div>
 
-    <p class="loading" id="loading" hidden>Reading the sheet…</p>
+    <p class="loading" id="loading" hidden>Reading the MIS sheet…</p>
   </main>
 
+  <div class="tip" id="tip" role="status" hidden></div>
   <footer class="foot">© Shopsense Retail Technologies | Internal. Confidential.</footer>
-
   <script src="app.js"></script>
 </body>
 </html>

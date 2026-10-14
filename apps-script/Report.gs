@@ -1,29 +1,22 @@
 /**
- * Fynd Revenue Portal — report logic.
+ * Fynd Finance Portal — report logic.
  *
- * Pure functions only: no SpreadsheetApp, no network. They take raw sheet
- * values (2-D arrays) and return the revenue book as plain JSON, so the same
- * code is unit-tested in Node (see /test).
- *
- * Rules follow the FY27 revenue book v0.7 footnotes.
+ * Pure functions: raw sheet values (2-D arrays) in, the finance book as
+ * plain JSON out. No SpreadsheetApp or network calls, so the same code
+ * runs under Node for tests (see /test).
  */
 
 var Report = (function () {
 
-  var MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
-  var MONTH_LABEL = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  var MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  var FY_ORDER = ['Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar'];
 
-  function norm(s) {
-    return String(s == null ? '' : s).toLowerCase().replace(/[^a-z0-9]/g, '');
-  }
+  /* ---------- parsing helpers ---------- */
 
-  function inList(value, list) {
-    var v = norm(value);
-    for (var i = 0; i < list.length; i++) if (norm(list[i]) === v) return true;
-    return false;
-  }
+  function norm(s) { return String(s == null ? '' : s).toLowerCase().replace(/[^a-z0-9]/g, ''); }
+  function isDate(v) { return Object.prototype.toString.call(v) === '[object Date]' && !isNaN(v); }
 
-  /** "1,23,456.7" -> 123456.7 ; "(500)" -> -500 ; "-" / "" -> 0 */
+  /** "1,23,456.7" -> 123456.7 ; "(500)" -> -500 ; "-" / "" / "#N/A" -> 0 */
   function num(v) {
     if (typeof v === 'number') return isFinite(v) ? v : 0;
     if (v == null) return 0;
@@ -36,49 +29,40 @@ var Report = (function () {
     return neg ? -Math.abs(n) : n;
   }
 
-  /** Date, "Apr-26", "April 2026", "2026-04-01", "04/2026" -> "Apr" */
-  function monthOf(v) {
+  /** Date | "Apr-26" | "Sep-26" | "2026-04-01" | "April 2026" -> {m:'Apr', y:2026} or null */
+  function monthYear(v) {
     if (v == null || v === '') return null;
-    if (Object.prototype.toString.call(v) === '[object Date]' && !isNaN(v)) {
-      return MONTH_LABEL[v.getMonth()];
-    }
-    var s = String(v).trim().toLowerCase();
-    for (var i = 0; i < MONTHS.length; i++) {
-      if (s.indexOf(MONTHS[i]) === 0 || new RegExp('[^a-z]' + MONTHS[i]).test(' ' + s)) {
-        return MONTH_LABEL[i];
-      }
-    }
-    var m = s.match(/^(\d{4})[-\/](\d{1,2})/) || s.match(/^(\d{1,2})[-\/](\d{4})/);
-    if (m) {
-      var mm = parseInt(m[1].length === 4 ? m[2] : m[1], 10);
-      if (mm >= 1 && mm <= 12) return MONTH_LABEL[mm - 1];
+    if (isDate(v)) return { m: MON[v.getMonth()], y: v.getFullYear() };
+    var s = String(v).trim();
+    var iso = s.match(/^(\d{4})-(\d{1,2})/);
+    if (iso) return { m: MON[parseInt(iso[2], 10) - 1], y: parseInt(iso[1], 10) };
+    var t = s.match(/^([A-Za-z]{3})[A-Za-z]*[\s\-\/']*(\d{2,4})?/);
+    if (t) {
+      var i = MON.map(function (x) { return x.toLowerCase(); }).indexOf(t[1].toLowerCase());
+      if (i < 0) return null;
+      var y = t[2] ? parseInt(t[2], 10) : null;
+      if (y != null && y < 100) y += 2000;
+      return { m: MON[i], y: y };
     }
     return null;
   }
 
-  function truthy(v, liveValues) {
-    if (v === true) return true;
-    if (v === false || v == null) return false;
-    return inList(v, liveValues);
+  function monthKey(my) { return my.m + '-' + String(my.y).slice(-2); }
+  function monthSort(a, b) {
+    var pa = monthYear(a), pb = monthYear(b);
+    return (pa.y * 12 + MON.indexOf(pa.m)) - (pb.y * 12 + MON.indexOf(pb.m));
   }
 
-  /**
-   * Locate the header row in the first 15 rows and map each field to a column.
-   * Returns { headerRow, cols: {field: index}, missing: [field] }.
-   */
   function mapHeaders(values, fields) {
     var best = { headerRow: -1, cols: {}, missing: Object.keys(fields), score: 0 };
     var limit = Math.min(values.length, 15);
     for (var r = 0; r < limit; r++) {
-      var row = values[r] || [];
-      var normRow = row.map(norm);
+      var normRow = (values[r] || []).map(norm);
       var cols = {}, score = 0, missing = [];
       Object.keys(fields).forEach(function (f) {
-        var aliases = fields[f], hit = -1;
-        for (var a = 0; a < aliases.length && hit < 0; a++) {
-          hit = normRow.indexOf(norm(aliases[a]));
-        }
-        if (hit >= 0) { cols[f] = hit; score++; } else { missing.push(f); }
+        var hit = -1, al = fields[f];
+        for (var a = 0; a < al.length && hit < 0; a++) hit = normRow.indexOf(norm(al[a]));
+        if (hit >= 0) { cols[f] = hit; score++; } else missing.push(f);
       });
       if (score > best.score) best = { headerRow: r, cols: cols, missing: missing, score: score };
     }
@@ -86,235 +70,305 @@ var Report = (function () {
   }
 
   function records(values, fields) {
-    var h = mapHeaders(values, fields);
-    var out = [];
+    var h = mapHeaders(values, fields), out = [];
     if (h.headerRow < 0) return { rows: out, header: h };
+    var keys = Object.keys(h.cols);
     for (var r = h.headerRow + 1; r < values.length; r++) {
-      var row = values[r] || [];
-      var rec = {}, any = false;
-      Object.keys(h.cols).forEach(function (f) {
-        rec[f] = row[h.cols[f]];
-        if (rec[f] !== '' && rec[f] != null) any = true;
-      });
+      var row = values[r] || [], rec = {}, any = false;
+      for (var k = 0; k < keys.length; k++) {
+        var v = row[h.cols[keys[k]]];
+        rec[keys[k]] = v;
+        if (v !== '' && v != null) any = true;
+      }
       if (any) out.push(rec);
     }
     return { rows: out, header: h };
   }
 
-  function canonicalCxo(name, cxos, extra) {
-    var all = cxos.concat(extra ? [extra] : []);
-    var n = norm(name);
-    if (!n) return null;
-    for (var i = 0; i < all.length; i++) if (norm(all[i]) === n) return all[i];
-    // "Dharam" style shorthand: prefix match
-    for (var j = 0; j < all.length; j++) {
-      var c = norm(all[j]);
-      if (c.indexOf(n) === 0 || n.indexOf(c) === 0) return all[j];
-    }
-    return null;
+  function makeCxoResolver(C) {
+    var map = {};
+    C.CXOS.forEach(function (c) { map[norm(c)] = c; });
+    Object.keys(C.CXO_ALIASES || {}).forEach(function (a) { map[norm(a)] = C.CXO_ALIASES[a]; });
+    return function (name) { return map[norm(name)] || null; };
   }
 
-  function zeros(keys) { var o = {}; keys.forEach(function (k) { o[k] = 0; }); return o; }
-  function sum(obj) { return Object.keys(obj).reduce(function (a, k) { return a + obj[k]; }, 0); }
+  function add(obj, k, v) { obj[k] = (obj[k] || 0) + v; }
+  function add2(obj, a, b, v) { if (!obj[a]) obj[a] = {}; add(obj[a], b, v); }
+  function total(o) { var s = 0; for (var k in o) if (o.hasOwnProperty(k)) s += o[k]; return s; }
 
-  /** Classify one owner-tab line. Returns 'dropped' | 'signed' | 'sent' | null */
-  function classify(rec, S) {
-    if (inList(rec.ofStatus, S.dropped) || inList(rec.customerStatus, S.dropped)) return 'dropped';
-    if (inList(rec.ofStatus, S.signedOf) || truthy(rec.live, S.liveValues) || num(rec.invoicedYtd) > 0) {
-      return 'signed';
-    }
-    if (inList(rec.ofStatus, S.sentOf)) return 'sent';
-    if (inList(rec.customerStatus, S.proposalCustomer) &&
-        inList(rec.ofStatus == null ? '' : rec.ofStatus, S.proposalOfAllowed)) return 'sent';
-    return null;
-  }
+  /* ---------- revenue ---------- */
 
-  /**
-   * Build the full book.
-   * input = {
-   *   asOf: ISO string,
-   *   summary: 2-D values, billed: 2-D values,
-   *   owners: { CXO: 2-D values }, commitment: 2-D values | null
-   * }
-   */
-  function build(input, C) {
-    var D = C.UNIT_DIVISOR || 1;
-    var cxos = C.CXOS.slice();
-    var sep = C.SEPARATE_LINE;
-    var everyone = cxos.concat([sep]);
-    var AM = C.ACTUAL_MONTHS, PM = C.PROJECTED_MONTHS;
-    var warnings = [];
-    var schema = {};
+  function buildRevenue(values, C, asOf, warnings, schema) {
+    var D = C.UNIT_DIVISOR, R = C.TABS.REVENUE;
+    var cxoOf = makeCxoResolver(C);
+    var excl = R.excludePattern ? new RegExp(R.excludePattern, 'i') : null;
+    var oth = R.otherIncomePattern ? new RegExp(R.otherIncomePattern, 'i') : null;
+    var cy = norm(C.CY.key), ly = norm(C.LY.key);
 
-    // ---- Targets
-    var targets = {};
-    var sum1 = records(input.summary || [], C.TABS.SUMMARY.fields);
-    schema.summary = sum1.header;
-    sum1.rows.forEach(function (r) {
-      var c = canonicalCxo(r.cxo, cxos, sep);
-      if (c) targets[c] = (targets[c] || 0) + num(r.target) / D;
+    var rec = records(values || [], R.fields);
+    schema.revenue = rec.header;
+
+    var by = {}, lyBy = {}, other = {}, excluded = {}, unknown = {};
+    var mix = { frequency: {}, bu: {}, ip: {}, region: {}, businessType: {}, revenueType: {}, entity: {} };
+    var cust = {}, outstanding = {}, openCount = {};
+    var lastInvoice = null;
+
+    C.CXOS.forEach(function (c) { by[c] = { billed: {}, collected: {} }; lyBy[c] = {}; outstanding[c] = 0; openCount[c] = 0; });
+
+    rec.rows.forEach(function (r) {
+      var f = norm(r.fy);
+      var isCy = f === cy, isLy = f === ly;
+      if (!isCy && !isLy) return;
+      var my = monthYear(r.month);
+      if (!my) return;
+      var m = my.m;
+      var amt = num(r.amount) / D, rc = num(r.receipt) / D, os = num(r.outstanding) / D;
+      var rt = String(r.revenueType || '');
+      var c = cxoOf(r.cxo);
+
+      if (excl && excl.test(rt)) { if (isCy) add(excluded, m, amt); return; }
+      if (oth && oth.test(rt)) { if (isCy) { if (!other[m]) other[m] = { billed: 0, collected: 0 }; other[m].billed += amt; other[m].collected += rc; } return; }
+      if (!c) { var u = String(r.cxo || '(blank)'); if (isCy) add(unknown, u, amt); return; }
+
+      if (os > 0.0000001) { outstanding[c] += os; openCount[c]++; }
+
+      if (isLy) { add(lyBy[c], m, amt); return; }
+
+      add(by[c].billed, m, amt);
+      add(by[c].collected, m, rc);
+      add2(mix.frequency, c, String(r.frequency || 'Unspecified').trim() || 'Unspecified', amt);
+      add2(mix.bu, c, String(r.bu || 'Unspecified').trim() || 'Unspecified', amt);
+      add2(mix.ip, c, String(r.ip || 'Unspecified').trim() || 'Unspecified', amt);
+      add2(mix.region, c, String(r.region || 'Unspecified').trim() || 'Unspecified', amt);
+      add2(mix.businessType, c, String(r.businessType || 'Unspecified').trim() || 'Unspecified', amt);
+      add2(mix.revenueType, c, rt.trim() || 'Unspecified', amt);
+      add2(mix.entity, c, String(r.entity || 'Unspecified').trim() || 'Unspecified', amt);
+
+      var name = String(r.customer || '(blank)').trim();
+      var key = c + '|' + name;
+      if (!cust[key]) cust[key] = { customer: name, cxo: c, billed: 0, collected: 0, invoices: 0 };
+      cust[key].billed += amt; cust[key].collected += rc; cust[key].invoices++;
+
+      var d = r.invoiceDate;
+      var dd = isDate(d) ? d : (d ? new Date(String(d)) : null);
+      if (dd && !isNaN(dd) && (!lastInvoice || dd > lastInvoice)) lastInvoice = dd;
     });
 
-    // ---- Billed and received by month
-    var billed = {}, received = {};
-    everyone.forEach(function (c) { billed[c] = zeros(AM); received[c] = zeros(AM); });
-    var other = { billed: zeros(AM), received: zeros(AM) };
-    var B = C.TABS.BILLED;
-    var bl = records(input.billed || [], B.fields);
-    schema.billed = bl.header;
-    var unmapped = {};
-    bl.rows.forEach(function (r) {
-      if (B.excludeTypes && inList(r.type, B.excludeTypes)) return;
-      var m = monthOf(r.month);
-      if (!m || AM.indexOf(m) < 0) return;
-      var b = num(r.billed) / D, rc = num(r.received) / D;
-      if (B.otherIncomeTypes && inList(r.type, B.otherIncomeTypes)) {
-        other.billed[m] += b; other.received[m] += rc; return;
-      }
-      var c = canonicalCxo(r.cxo, cxos, sep);
-      if (!c) { unmapped[r.cxo || '(blank)'] = (unmapped[r.cxo || '(blank)'] || 0) + b; return; }
-      billed[c][m] += b; received[c][m] += rc;
-    });
-    Object.keys(unmapped).forEach(function (k) {
-      warnings.push('Billed rows with CXO "' + k + '" do not match any CXO: Rs ' + unmapped[k].toFixed(2) + ' Cr left out.');
-    });
+    // Months with billing this year, in FY order
+    var seen = {};
+    C.CXOS.forEach(function (c) { Object.keys(by[c].billed).forEach(function (m) { seen[m] = 1; }); });
+    var months = FY_ORDER.filter(function (m) { return seen[m]; });
+    var last = months[months.length - 1] || null;
+    var ref = asOf ? new Date(asOf) : null;
+    var partial = (last && ref && MON[ref.getMonth()] === last) ? last : null;
 
-    // ---- Commitment weights (optional)
-    var commit = {}, sepCommit = {};
-    if (input.commitment && input.commitment.length) {
-      var cf = { cxo: C.TABS.COMMITMENT.fields.cxo };
-      PM.concat(['Sep']).forEach(function (m) { cf[m] = [m]; });
-      var cm = records(input.commitment, cf);
-      schema.commitment = cm.header;
-      cm.rows.forEach(function (r) {
-        var c = canonicalCxo(r.cxo, cxos, sep);
-        if (!c) return;
-        commit[c] = {};
-        PM.forEach(function (m) { commit[c][m] = num(r[m]); });
-        if (r.Sep != null && r.Sep !== '') sepCommit[c] = num(r.Sep) / D;
+    // Same period last year: the same months, excluding a partial current month
+    var compMonths = months.filter(function (m) { return m !== partial; });
+
+    Object.keys(unknown).forEach(function (k) {
+      warnings.push('Revenue Data rows with CXO "' + k + '" match no CXO: Rs ' + unknown[k].toFixed(2) + ' Cr this year left out.');
+    });
+    if (total(excluded) > 0) warnings.push('Inter-company / deposit rows left out this year: Rs ' + total(excluded).toFixed(2) + ' Cr.');
+
+    // Top 50 customers per CXO keeps the payload small; the rest roll into one line
+    var perCxo = {}, customers = [], rest = {};
+    Object.keys(cust).map(function (k) { return cust[k]; })
+      .sort(function (a, b) { return b.billed - a.billed; })
+      .forEach(function (x) {
+        perCxo[x.cxo] = (perCxo[x.cxo] || 0) + 1;
+        if (perCxo[x.cxo] <= 50) { customers.push(x); return; }
+        if (!rest[x.cxo]) rest[x.cxo] = { customer: '', cxo: x.cxo, billed: 0, collected: 0, invoices: 0, others: 0 };
+        rest[x.cxo].billed += x.billed; rest[x.cxo].collected += x.collected; rest[x.cxo].invoices += x.invoices; rest[x.cxo].others++;
       });
-    }
-
-    // ---- Owner tabs: projections and beyond FY27
-    var proj = {}, beyond = {}, lines = [], liveNoOf = { count: 0, value: 0 };
-    cxos.forEach(function (c) {
-      proj[c] = { signed: 0, sent: 0, signedMonths: zeros(PM), sentMonths: zeros(PM), hasTab: false };
-      beyond[c] = { signed: 0, sent: 0 };
-    });
-    var O = C.TABS.OWNER;
-    cxos.forEach(function (c) {
-      var vals = input.owners && input.owners[c];
-      if (!vals) return;
-      proj[c].hasTab = true;
-      var rr = records(vals, O.fields);
-      schema['owner:' + c] = rr.header;
-      rr.rows.forEach(function (r) {
-        var k = classify(r, C.STATUS);
-        if (k !== 'signed' && k !== 'sent') return;
-        var exp = num(r.expected) / D;
-        var inv = num(r.invoicedYtd) / D;
-        var tcv = num(r.ofValue) || num(r.estTcv);
-        tcv = tcv / D;
-        var rest = tcv > 0 ? tcv - inv - exp : 0;
-        if (k === 'signed') {
-          proj[c].signed += exp;
-          if (!inList(r.ofStatus, C.STATUS.signedOf)) { liveNoOf.count++; liveNoOf.value += exp; }
-        } else {
-          proj[c].sent += exp;
-        }
-        if (rest > 0.00001) {
-          beyond[c][k] += rest;
-          lines.push({ customer: String(r.customer || ''), cxo: c, ip: String(r.ip || ''),
-                       revenueType: String(r.revenueType || ''), status: k, beyond: rest });
-        }
-      });
-    });
-
-    // Phase projections across months
-    cxos.forEach(function (c) {
-      var p = proj[c];
-      PM.forEach(function (m) { p.signedMonths[m] = p.signed / PM.length; });
-      var w = commit[c], wt = w ? sum(w) : 0;
-      PM.forEach(function (m) {
-        p.sentMonths[m] = wt > 0 ? p.sent * (w[m] / wt) : p.sent / PM.length;
-      });
-    });
-
-    // ---- At a glance
-    var glance = everyone.map(function (c) {
-      var b = sum(billed[c]);
-      var hasProj = c !== sep && proj[c] && proj[c].hasTab && (proj[c].signed + proj[c].sent) > 0;
-      var p = hasProj ? proj[c].signed + proj[c].sent : null;
-      var t = targets.hasOwnProperty(c) ? targets[c] : null;
-      var total = b + (p || 0);
-      return {
-        cxo: c, billed: b, projected: p, total: total, target: t,
-        pctOfTarget: t ? total / t : null, separate: c === sep
-      };
-    });
-
-    // ---- September check
-    var sepCheck = null;
-    if (Object.keys(sepCommit).length) {
-      sepCheck = cxos.filter(function (c) { return sepCommit.hasOwnProperty(c); }).map(function (c) {
-        var a = billed[c].Sep || 0;
-        return { cxo: c, projected: sepCommit[c], billed: a, diff: a - sepCommit[c],
-                 pct: sepCommit[c] ? a / sepCommit[c] : null };
-      });
-    }
-
-    lines.sort(function (a, b) { return b.beyond - a.beyond; });
+    Object.keys(rest).forEach(function (c) { rest[c].customer = rest[c].others + ' other customers'; customers.push(rest[c]); });
 
     return {
-      fy: C.FY_LABEL,
-      asOf: input.asOf || null,
-      months: { actual: AM, projected: PM },
-      cxos: cxos, separateLine: sep,
-      glance: glance,
-      billed: billed, received: received, otherIncome: other,
-      sepCheck: sepCheck,
-      projection: proj,
-      beyond: beyond, beyondLines: lines,
-      liveWithoutOf: liveNoOf,
-      warnings: warnings,
-      schema: schema
+      months: months, partialMonth: partial, compareMonths: compMonths,
+      lastInvoiceDate: lastInvoice ? lastInvoice.toISOString().slice(0, 10) : null,
+      byCxo: by, lyByCxo: lyBy,
+      outstanding: outstanding, openInvoices: openCount,
+      otherIncome: other, excluded: excluded,
+      mix: mix, customers: customers
     };
   }
 
+  /* ---------- CXO P/L ---------- */
+
+  function buildPnl(values, C, warnings, schema) {
+    var cxoOf = makeCxoResolver(C);
+    var P = C.TABS.PNL;
+    var childOf = {};
+    Object.keys(P.children || {}).forEach(function (p) { P.children[p].forEach(function (k) { childOf[norm(k)] = p; }); });
+
+    var blocks = {}, order = [], current = null, cols = null;
+    (values || []).forEach(function (row) {
+      row = row || [];
+      var first = row[0];
+      var my = monthYear(first);
+      // Header row: a month in col A and at least three CXO names across
+      if (my && my.y) {
+        var hits = {}, n = 0;
+        for (var i = 1; i < row.length; i++) { var c = cxoOf(row[i]); if (c && hits[c] == null) { hits[c] = i; n++; } }
+        if (n >= 3) {
+          current = monthKey(my);
+          cols = hits;
+          if (!blocks[current]) { blocks[current] = { lines: [], values: {} }; order.push(current); }
+          return;
+        }
+      }
+      if (!current) return;
+      var label = String(first == null ? '' : first).replace(/:\s*$/, '').trim();
+      if (!label || /^expenses$/i.test(label)) return;
+      var b = blocks[current];
+      if (b.values[label]) return; // first occurrence wins
+      var vals = {}, any = false;
+      Object.keys(cols).forEach(function (c) {
+        var v = row[cols[c]];
+        if (v !== '' && v != null) any = true;
+        vals[c] = num(v) / C.UNIT_DIVISOR;
+      });
+      if (!any) return;
+      b.lines.push(label);
+      b.values[label] = vals;
+      // EBITDA closes the block; rows after it are ignored until the next header
+      if (/^ebitda$/i.test(label)) current = null;
+    });
+
+    order.sort(monthSort);
+    // Union of lines in first-seen order
+    var lines = [];
+    order.forEach(function (m) { blocks[m].lines.forEach(function (l) { if (lines.indexOf(l) < 0) lines.push(l); }); });
+    // Keep EBITDA last
+    lines.sort(function (a, b) { return (/^ebitda$/i.test(a) ? 1 : 0) - (/^ebitda$/i.test(b) ? 1 : 0); });
+
+    schema.pnl = { months: order, lines: lines };
+    if (!order.length) warnings.push('No monthly blocks found on the CXO P/L tab.');
+
+    var parent = {};
+    lines.forEach(function (l) { if (childOf[norm(l)]) parent[l] = childOf[norm(l)]; });
+
+    var data = {};
+    order.forEach(function (m) { data[m] = blocks[m].values; });
+
+    return { months: order, lines: lines, parent: parent, keyLines: P.keyLines, data: data };
+  }
+
+  /* ---------- order forms ---------- */
+
+  function buildOrderForms(values, C, warnings, schema) {
+    var cxoOf = makeCxoResolver(C), D = C.UNIT_DIVISOR;
+    var rec = records(values || [], C.TABS.ORDER_FORM.fields);
+    schema.orderForms = rec.header;
+    var by = {}, list = [], unknown = 0;
+    rec.rows.forEach(function (r) {
+      if (!r.ofNo && !r.customer) return;
+      if (/grand total/i.test(String(r.ofNo || ''))) return;
+      var q = String(r.qtr || '');
+      if (q && q.indexOf(C.CY.label) < 0) return;
+      var c = cxoOf(r.cxo);
+      if (!c) { unknown++; return; }
+      var v = num(r.value) / D, a = num(r.annualised) / D;
+      if (!by[c]) by[c] = { count: 0, value: 0, annualised: 0, byQtr: {} };
+      by[c].count++; by[c].value += v; by[c].annualised += a;
+      add(by[c].byQtr, q.split(' ')[0] || 'Q?', v);
+      var d = r.signed, iso = isDate(d) ? d.toISOString().slice(0, 10) : String(d || '');
+      list.push({ ofNo: String(r.ofNo || ''), customer: String(r.customer || ''), services: String(r.services || ''),
+                  cxo: c, salesRep: String(r.salesRep || ''), qtr: q, signed: iso, term: num(r.term), value: v, annualised: a });
+    });
+    if (unknown) warnings.push(unknown + ' Order Form rows have a CXO that matches no CXO.');
+    list.sort(function (a, b) { return a.signed < b.signed ? 1 : a.signed > b.signed ? -1 : 0; });
+    return { byCxo: by, list: list };
+  }
+
+  /* ---------- reconciliation ---------- */
+
+  function reconcile(values, rev, C, warnings) {
+    if (!values || !values.length) return null;
+    var cxoOf = makeCxoResolver(C);
+    var rec = records(values, C.TABS.RECON.fields), out = [], seen = {};
+    rec.rows.forEach(function (r) {
+      var c = cxoOf(r.cxo);
+      if (!c || seen[c]) return;   // first table on the tab only
+      seen[c] = 1;
+      var sheet = num(r.billed);   // already Rs Cr on this tab
+      var mine = total(rev.byCxo[c] ? rev.byCxo[c].billed : {});
+      out.push({ cxo: c, sheet: sheet, portal: mine, diff: mine - sheet });
+      if (Math.abs(mine - sheet) > 0.05) {
+        warnings.push(c + ': portal billed YTD ' + mine.toFixed(2) + ' vs Billed Collected summary ' + sheet.toFixed(2) + ' Cr.');
+      }
+    });
+    return out;
+  }
+
+  /* ---------- build + filter ---------- */
+
+  function build(input, C) {
+    var warnings = [], schema = {};
+    var revenue = buildRevenue(input.revenue, C, input.asOf, warnings, schema);
+    var pnl = buildPnl(input.pnl, C, warnings, schema);
+    var orderForms = buildOrderForms(input.orderForms, C, warnings, schema);
+    var recon = reconcile(input.recon, revenue, C, warnings);
+    if (schema.revenue && schema.revenue.missing.length) warnings.push('Revenue Data columns not found: ' + schema.revenue.missing.join(', '));
+    if (schema.orderForms && schema.orderForms.missing.length) warnings.push('Order Form columns not found: ' + schema.orderForms.missing.join(', '));
+    return {
+      fy: { cy: C.CY.label, ly: C.LY.label },
+      asOf: input.asOf || null,
+      cxos: C.CXOS.slice(), separateLine: C.SEPARATE_LINE,
+      revenue: revenue, pnl: pnl, orderForms: orderForms,
+      recon: recon, warnings: warnings, schema: schema
+    };
+  }
+
+  function pick(obj, keep) {
+    var o = {};
+    if (!obj) return o;
+    keep.forEach(function (k) { if (obj.hasOwnProperty(k)) o[k] = obj[k]; });
+    return o;
+  }
+
   /**
-   * Cut the book down to what this viewer may see.
-   * access = { role: 'admin' } or { role: 'cxo', cxo: 'Ragini' }
-   * Non-admins get only their own CXO; totals, JCP, other income and
-   * schema diagnostics are removed.
+   * access = { role: 'admin' } | { role: 'cxo', cxos: ['Ragini', 'Ronak'] }
+   * A CXO view keeps only their own keys everywhere. Other income, excluded
+   * rows, reconciliation, warnings and schema are admin only.
    */
   function filterFor(book, access) {
     if (access && access.role === 'admin') {
       var a = JSON.parse(JSON.stringify(book));
-      a.viewer = { role: 'admin', cxos: book.cxos };
+      a.viewer = { role: 'admin', cxos: book.cxos.slice() };
       return a;
     }
-    var me = access && access.cxo;
-    if (!me || book.cxos.indexOf(me) < 0) throw new Error('No CXO mapped to this account.');
-    function only(obj) { var o = {}; if (obj && obj.hasOwnProperty(me)) o[me] = obj[me]; return o; }
+    var keep = (access && access.cxos || []).filter(function (c) { return book.cxos.indexOf(c) >= 0; });
+    if (!keep.length) throw new Error('No CXO mapped to this account.');
+    var r = book.revenue, p = book.pnl, o = book.orderForms;
+    var mix = {};
+    Object.keys(r.mix).forEach(function (k) { if (k !== 'revenueType') mix[k] = pick(r.mix[k], keep); });
+    var pdata = {};
+    p.months.forEach(function (m) {
+      pdata[m] = {};
+      Object.keys(p.data[m]).forEach(function (line) { pdata[m][line] = pick(p.data[m][line], keep); });
+    });
     return {
-      fy: book.fy, asOf: book.asOf, months: book.months,
-      cxos: [me], separateLine: null,
-      glance: book.glance.filter(function (g) { return g.cxo === me; }),
-      billed: only(book.billed), received: only(book.received), otherIncome: null,
-      sepCheck: book.sepCheck ? book.sepCheck.filter(function (s) { return s.cxo === me; }) : null,
-      projection: only(book.projection),
-      beyond: only(book.beyond),
-      beyondLines: book.beyondLines.filter(function (l) { return l.cxo === me; }),
-      liveWithoutOf: null,
-      warnings: [],
-      viewer: { role: 'cxo', cxos: [me] }
+      fy: book.fy, asOf: book.asOf,
+      cxos: book.cxos.filter(function (c) { return keep.indexOf(c) >= 0; }),
+      separateLine: null,
+      revenue: {
+        months: r.months, partialMonth: r.partialMonth, compareMonths: r.compareMonths,
+        lastInvoiceDate: r.lastInvoiceDate,
+        byCxo: pick(r.byCxo, keep), lyByCxo: pick(r.lyByCxo, keep),
+        outstanding: pick(r.outstanding, keep), openInvoices: pick(r.openInvoices, keep),
+        otherIncome: null, excluded: null, mix: mix,
+        customers: r.customers.filter(function (x) { return keep.indexOf(x.cxo) >= 0; })
+      },
+      pnl: { months: p.months, lines: p.lines, parent: p.parent, keyLines: p.keyLines, data: pdata },
+      orderForms: { byCxo: pick(o.byCxo, keep), list: o.list.filter(function (x) { return keep.indexOf(x.cxo) >= 0; }) },
+      recon: null, warnings: [],
+      viewer: { role: 'cxo', cxos: keep }
     };
   }
 
   return {
     build: build, filterFor: filterFor,
-    // exported for tests
-    _num: num, _monthOf: monthOf, _classify: classify, _mapHeaders: mapHeaders, _canonicalCxo: canonicalCxo
+    _num: num, _monthYear: monthYear, _mapHeaders: mapHeaders, _cxoResolver: makeCxoResolver
   };
 })();
 

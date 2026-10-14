@@ -1,113 +1,99 @@
 /**
- * Fynd Revenue Portal — configuration.
+ * Fynd Finance Portal — configuration.
  *
  * Everything that depends on the layout of "MIS for Monthly Report FY27"
- * lives here. If a tab or column is renamed in the sheet, change it here
- * and redeploy. Run `?action=schema` as an admin to see what matched.
- *
- * Header names are matched loosely: case, spaces and punctuation are ignored,
- * and each field accepts a list of aliases.
+ * lives here. Header names are matched loosely (case, spaces and
+ * punctuation ignored) and each field takes a list of aliases.
+ * Run setupCheck() in the editor, or open the admin view, to see what matched.
  */
 
 var CONFIG = {
-  // Source sheet: MIS for Monthly Report FY27
+  // MIS for Monthly Report FY27 (owner: muskankatta2@gofynd.com)
   SPREADSHEET_ID: '15gEZfqdeT1A9MPrK_DMfCPTLk59rmc_4dubmttWh7DI',
 
-  // OAuth Web client ID from Google Cloud console (same value goes in web/config.js)
+  // OAuth Web client ID (same value goes in web/config.js)
   OAUTH_CLIENT_ID: 'REPLACE_ME.apps.googleusercontent.com',
-
-  // Only Google accounts on this Workspace domain can sign in
   ALLOWED_DOMAIN: 'gofynd.com',
 
-  // Sheet values are in Rs; divide to show Rs Cr
+  // Sheet values are in Rs; the portal shows Rs Cr
   UNIT_DIVISOR: 1e7,
 
-  // Financial year
-  FY_LABEL: 'FY27',
-  ACTUAL_MONTHS: ['Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep'],
-  PROJECTED_MONTHS: ['Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar'],
+  // Financial years as written in Revenue Data > Financial_Year
+  CY: { key: 'FY2026-27', label: 'FY27' },
+  LY: { key: 'FY2025-26', label: 'FY26' },
 
-  // CXOs shown in the book, in display order. JCP is reported separately.
-  CXOS: ['Salman', 'Ragini', 'SMG', 'Dharmendra', 'Ronak', 'Jigar', 'Debajit', 'Kushan', 'Kavish'],
+  // Display order. JCP is reported on its own line, outside "Total excluding JCP".
+  CXOS: ['Salman', 'Ragini', 'SMG', 'Dharmendra', 'Ronak', 'Jigar', 'Debajit', 'Kushan', 'Kavish', 'Central', 'JCP'],
   SEPARATE_LINE: 'JCP',
+  CXO_ALIASES: { Dharam: 'Dharmendra', Sreeraman: 'SMG' },
 
-  // Cache the computed book for this many seconds (max 21600)
   CACHE_SECONDS: 300,
 
   TABS: {
-    // Who can see what. Maintained in the sheet by S&C.
-    // Columns: Email | Role (admin / cxo) | CXO
     ACCESS: {
       name: 'Portal Access',
-      fields: {
-        email: ['Email', 'Email ID'],
-        role: ['Role'],
-        cxo: ['CXO', 'PNL Owner']
-      }
+      fields: { email: ['Email', 'Email ID'], role: ['Role'], cxo: ['CXO', 'CXOs', 'PNL Owner'] }
     },
 
-    // AOP / target per CXO
-    SUMMARY: {
-      name: 'Summary',
+    REVENUE: {
+      name: 'Revenue Data',
       fields: {
-        cxo: ['CXO', 'PNL Owner', 'PNL Owner CXO'],
-        target: ['AOP/ Target', 'AOP Target', 'AOP', 'Target']
-      }
-    },
-
-    // One row per invoice line
-    BILLED: {
-      name: 'Revenue Billed YTD',
-      fields: {
-        cxo: ['CXO', 'PNL Owner', 'PNL Owner CXO'],
-        month: ['Invoice Month', 'Month'],
-        billed: ['Billed', 'Invoice Amount', 'Amount', 'Revenue'],
-        received: ['Received', 'Amount Received', 'Receipts'],
-        type: ['Revenue Type', 'Type', 'Category'],
-        customer: ['Customer Name', 'Customer']
+        customer: ['Company_Name', 'Customer Name'],
+        fy: ['Financial_Year'],
+        month: ['Month_YY'],
+        voucher: ['Voucher_Type'],
+        amount: ['Revenue_Netof_Tax'],
+        receipt: ['Receipt Amount'],
+        outstanding: ['Outstanding'],
+        osStatus: ['O/s_Status'],
+        invoiceDate: ['Invoice_date'],
+        bu: ['Business_Unit'],
+        ip: ['IP'],
+        region: ['Region'],
+        cxo: ['CXO'],
+        entity: ['Billing Entity'],
+        revenueType: ['Revenue_Type'],
+        frequency: ['Frequency'],
+        customerType: ['Customer Type'],
+        businessType: ['Business Type']
       },
-      // Rows whose type matches are dropped entirely
-      excludeTypes: ['Inter-company deposit', 'Intercompany Deposit', 'IC Deposit'],
-      // Rows whose type matches are shown on their own line, outside totals
-      otherIncomeTypes: ['Other Income']
+      // Revenue_Type patterns (case-insensitive regex)
+      excludePattern: 'inter.?company|deposit',   // dropped entirely, like v0.7
+      otherIncomePattern: 'other income'          // own line, outside totals
     },
 
-    // Owner tabs: one tab per CXO holding contract / pipeline lines.
-    // Tab name = CXO name unless overridden here.
-    OWNER: {
-      tabNameFor: {},  // e.g. { Dharmendra: 'Dharam' }
+    PNL: {
+      name: 'CXO P/L',
+      // Rows shown as sub-lines under the line above them
+      children: {
+        'Ops Cost': ['Ops Cost - Stock', 'DP & PG Cost', 'Purchase Cost Create'],
+        'People Cost': ['Build', 'Sell', 'Support']
+      },
+      keyLines: ['Revenue', 'Total Expenses', 'EBITDA']
+    },
+
+    ORDER_FORM: {
+      name: 'Order Form',
       fields: {
-        customer: ['Customer Name', 'Customer'],
-        ip: ['IP', 'Product'],
-        revenueType: ['Revenue Type'],
-        ofStatus: ['Order form status', 'OF Status'],
-        customerStatus: ['Customer Status'],
-        live: ['Live', 'Is Live'],
-        invoicedYtd: ['Invoiced Revenue (YTD)', 'Invoiced Revenue YTD', 'Invoiced YTD'],
-        ofValue: ['Total Order Form Value', 'Order Form Value', 'OF Value'],
-        estTcv: ['Estimated TCV', 'TCV'],
-        expected: ['Expected Oct to Mar', 'Expected Oct-Mar', 'Expected Revenue Oct-Mar', 'Expected']
+        ofNo: ['Order_Form_No'],
+        customer: ['Customer_Name'],
+        services: ['Services'],
+        businessType: ['Business Type'],
+        salesRep: ['Sales_Representative'],
+        cxo: ['CXO'],
+        region: ['Region'],
+        qtr: ['QTR'],
+        signed: ['Date_of_Signing'],
+        term: ['Order_Form_Term'],
+        value: ['Grand Total'],
+        annualised: ['Annualised Value']
       }
     },
 
-    // Optional. Owner commitment by month (25 September sheet).
-    // Columns: CXO | Oct | Nov | ... | Mar | Sep
-    // Used to phase unsigned lines and for the September check.
-    COMMITMENT: {
-      name: 'Commitment',
-      optional: true,
-      fields: {
-        cxo: ['CXO', 'PNL Owner']
-      }
+    // Used only to reconcile; never shown to CXOs
+    RECON: {
+      name: 'Billed Collected summary',
+      fields: { cxo: ['CXO'], billed: ['Billed as per report', 'Billed'] }
     }
-  },
-
-  STATUS: {
-    signedOf: ['Signed'],
-    liveValues: ['Yes', 'Y', 'Live', 'TRUE'],
-    sentOf: ['OF sent for signing', 'Commercial Sent'],
-    proposalCustomer: ['Proposal Sent'],
-    proposalOfAllowed: ['', 'Proposal Sent'],
-    dropped: ['Churned', 'Expired', 'Dropped']
   }
 };
